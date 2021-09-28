@@ -1,0 +1,46 @@
+#!/usr/bin/env python
+import argparse
+import json
+import sys
+import typing as t
+
+from enumerate_iam.main import enumerate_iam
+
+
+class Key(t.TypedDict):
+    source: t.Optional[str]
+    access_key_id: t.Optional[str]
+    secret_access_key: t.Optional[str]
+    session_token: t.Optional[str]
+    region: t.Optional[str]
+
+
+def main():
+    parser = argparse.ArgumentParser(description='Enumerate IAM permissions')
+    parser.add_argument(
+        '--region', help='AWS region to send API requests to', default='us-east-1')
+    parser.add_argument(
+        '--json', help='Print results to stdout as json', action='store_true')
+
+    args = parser.parse_args()
+
+    for n, line in enumerate(sys.stdin):
+        key: Key = json.loads(line)
+        if 'access_key_id' not in key or 'secret_access_key' not in key:
+            print(f'Missing access key or secret (line {n})')
+            continue
+        access_key_id = key['access_key_id']
+        source = key.get('source', 'unknown')
+        print(f'Testing {access_key_id} (from: {source}) (line {n})',
+              file=sys.stderr)
+        output = enumerate_iam(access_key_id,
+                               key['secret_access_key'],
+                               key.get('session_token'),
+                               args.region)
+        if args.json:
+            output['key'] = key
+            print(json.dumps(output, default=lambda o: repr(o)))
+
+
+if __name__ == '__main__':
+    main()

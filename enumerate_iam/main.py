@@ -16,13 +16,14 @@ Improvements:
     * Increased API call coverage
     * Export as a library
 """
-import re
 import json
 import logging
+import os
+import random
+import re
+
 import boto3
 import botocore
-import random
-
 from botocore.client import Config
 from botocore.endpoint import MAX_POOL_CONNECTIONS
 from multiprocessing.dummy import Pool as ThreadPool
@@ -31,7 +32,7 @@ from enumerate_iam.utils.remove_metadata import remove_metadata
 from enumerate_iam.utils.json_utils import json_encoder
 from enumerate_iam.bruteforce_tests import BRUTEFORCE_TESTS
 
-MAX_THREADS = 25
+MAX_THREADS = 10
 CLIENT_POOL = {}
 
 
@@ -68,7 +69,8 @@ def enumerate_using_bruteforce(access_key, secret_key, session_token, region):
     logger.info('Attempting common-service describe / list brute force.')
 
     pool = ThreadPool(MAX_THREADS)
-    args_generator = generate_args(access_key, secret_key, session_token, region)
+    args_generator = generate_args(
+        access_key, secret_key, session_token, region)
 
     try:
         results = pool.map(check_one_permission, args_generator)
@@ -115,7 +117,8 @@ def generate_args(access_key, secret_key, session_token, region):
 
 
 def get_client(access_key, secret_key, session_token, service_name, region):
-    key = '%s-%s-%s-%s-%s' % (access_key, secret_key, session_token, service_name, region)
+    key = '%s-%s-%s-%s-%s' % (access_key, secret_key,
+                              session_token, service_name, region)
 
     client = CLIENT_POOL.get(key, None)
     if client is not None:
@@ -126,7 +129,7 @@ def get_client(access_key, secret_key, session_token, service_name, region):
 
     config = Config(connect_timeout=5,
                     read_timeout=5,
-                    retries={'max_attempts': 30},
+                    retries={'max_attempts': 3},
                     max_pool_connections=MAX_POOL_CONNECTIONS * 2)
 
     try:
@@ -152,7 +155,8 @@ def check_one_permission(arg_tuple):
     access_key, secret_key, session_token, region, service_name, operation_name = arg_tuple
     logger = logging.getLogger()
 
-    service_client = get_client(access_key, secret_key, session_token, service_name, region)
+    service_client = get_client(
+        access_key, secret_key, session_token, service_name, region)
     if service_client is None:
         return
 
@@ -164,17 +168,30 @@ def check_one_permission(arg_tuple):
         logger.error('Remove %s.%s action' % (service_name, operation_name))
         return
 
-    logger.debug('Testing %s.%s() in region %s' % (service_name, operation_name, region))
+    logger.debug('Testing %s.%s() in region %s' %
+                 (service_name, operation_name, region))
 
     try:
         action_response = action_function()
     except (botocore.exceptions.ClientError,
             botocore.exceptions.EndpointConnectionError,
             botocore.exceptions.ConnectTimeoutError,
-            botocore.exceptions.ReadTimeoutError):
+            botocore.exceptions.ReadTimeoutError) as e:
         return
-    except botocore.exceptions.ParamValidationError:
+    except (botocore.exceptions.ParamValidationError,
+            # this sdk is super messy
+            # these are api calls that require an argument
+            botocore.exceptions.BadRequestException,
+            botocore.exceptions.InvalidArgument,
+            botocore.exceptions.InvalidParameterException,
+            botocore.exceptions.InvalidRequestException,
+            botocore.exceptions.ValidationException,
+            botocore.exceptions.MissingParameter,
+            botocore.exceptions.DeploymentIdRequiredException) as e:
         logger.error('Remove %s.%s action' % (service_name, operation_name))
+        return
+    except Exception as e:
+        logger.error(e)
         return
 
     msg = '-- %s.%s() worked!'
@@ -186,9 +203,17 @@ def check_one_permission(arg_tuple):
     return key, remove_metadata(action_response)
 
 
+def get_log_level() -> int:
+    l = os.environ.get('ENUMERATE_IAM_LOG_LEVEL', 'INFO')
+    level = getattr(logging, l)
+    if isinstance(level, int):
+        return level
+    return logging.INFO
+
+
 def configure_logging():
     logging.basicConfig(
-        level=logging.INFO,
+        level=get_log_level(),
         format='%(asctime)s - %(process)d - [%(levelname)s] %(message)s',
     )
 
@@ -204,7 +229,8 @@ def configure_logging():
     urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
     # import botocore.vendored.requests.packages.urllib3 as urllib3
-    urllib3.disable_warnings(botocore.vendored.requests.packages.urllib3.exceptions.InsecureRequestWarning)
+    urllib3.disable_warnings(
+        botocore.vendored.requests.packages.urllib3.exceptions.InsecureRequestWarning)
 
 
 def enumerate_iam(access_key, secret_key, session_token, region):
@@ -216,8 +242,10 @@ def enumerate_iam(access_key, secret_key, session_token, region):
     output = dict()
     configure_logging()
 
-    output['iam'] = enumerate_using_iam(access_key, secret_key, session_token, region)
-    output['bruteforce'] = enumerate_using_bruteforce(access_key, secret_key, session_token, region)
+    output['iam'] = enumerate_using_iam(
+        access_key, secret_key, session_token, region)
+    output['bruteforce'] = enumerate_using_bruteforce(
+        access_key, secret_key, session_token, region)
 
     return output
 
@@ -227,7 +255,8 @@ def enumerate_using_iam(access_key, secret_key, session_token, region):
     logger = logging.getLogger()
 
     # Connect to the IAM API and start testing.
-    logger.info('Starting permission enumeration for access-key-id "%s"', access_key)
+    logger.info(
+        'Starting permission enumeration for access-key-id "%s"', access_key)
     iam_client = boto3.client(
         'iam',
         aws_access_key_id=access_key,
@@ -243,10 +272,13 @@ def enumerate_using_iam(access_key, secret_key, session_token, region):
             botocore.exceptions.ReadTimeoutError):
         pass
     else:
-        logger.info('Run for the hills, get_account_authorization_details worked!')
-        logger.info('-- %s', json.dumps(everything, indent=4, default=json_encoder))
+        logger.info(
+            'Run for the hills, get_account_authorization_details worked!')
+        logger.info('-- %s', json.dumps(everything,
+                    indent=4, default=json_encoder))
 
-        output['iam.get_account_authorization_details'] = remove_metadata(everything)
+        output['iam.get_account_authorization_details'] = remove_metadata(
+            everything)
 
     enumerate_user(iam_client, output)
     enumerate_role(iam_client, output)
@@ -288,11 +320,13 @@ def enumerate_role(iam_client, output):
 
     # Attempt to get policies attached to this user.
     try:
-        role_policies = iam_client.list_attached_role_policies(RoleName=role_name)
+        role_policies = iam_client.list_attached_role_policies(
+            RoleName=role_name)
     except botocore.exceptions.ClientError as err:
         pass
     else:
-        output['iam.list_attached_role_policies'] = remove_metadata(role_policies)
+        output['iam.list_attached_role_policies'] = remove_metadata(
+            role_policies)
 
         logger.info(
             'Role "%s" has %0d attached policies',
@@ -302,7 +336,8 @@ def enumerate_role(iam_client, output):
 
         # List all policies, if present.
         for policy in role_policies['AttachedPolicies']:
-            logger.info('-- Policy "%s" (%s)', policy['PolicyName'], policy['PolicyArn'])
+            logger.info('-- Policy "%s" (%s)',
+                        policy['PolicyName'], policy['PolicyArn'])
 
     # Attempt to get inline policies for this user.
     try:
@@ -359,11 +394,13 @@ def enumerate_user(iam_client, output):
 
     # Attempt to get policies attached to this user.
     try:
-        user_policies = iam_client.list_attached_user_policies(UserName=user_name)
+        user_policies = iam_client.list_attached_user_policies(
+            UserName=user_name)
     except botocore.exceptions.ClientError as err:
         pass
     else:
-        output['iam.list_attached_user_policies'] = remove_metadata(user_policies)
+        output['iam.list_attached_user_policies'] = remove_metadata(
+            user_policies)
 
         logger.info(
             'User "%s" has %0d attached policies',
@@ -373,7 +410,8 @@ def enumerate_user(iam_client, output):
 
         # List all policies, if present.
         for policy in user_policies['AttachedPolicies']:
-            logger.info('-- Policy "%s" (%s)', policy['PolicyName'], policy['PolicyArn'])
+            logger.info('-- Policy "%s" (%s)',
+                        policy['PolicyName'], policy['PolicyArn'])
 
     # Attempt to get inline policies for this user.
     try:
@@ -415,9 +453,11 @@ def enumerate_user(iam_client, output):
 
     for group in user_groups['Groups']:
         try:
-            group_policy = iam_client.list_group_policies(GroupName=group['GroupName'])
+            group_policy = iam_client.list_group_policies(
+                GroupName=group['GroupName'])
 
-            output['iam.list_group_policies'][group['GroupName']] = remove_metadata(group_policy)
+            output['iam.list_group_policies'][group['GroupName']
+                                              ] = remove_metadata(group_policy)
 
             logger.info(
                 '-- Group "%s" has %0d inline policies',
@@ -432,4 +472,3 @@ def enumerate_user(iam_client, output):
             pass
 
     return output
-
