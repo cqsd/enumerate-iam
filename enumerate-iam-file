@@ -21,8 +21,13 @@ def main():
         '--region', help='AWS region to send API requests to', default='us-east-1')
     parser.add_argument(
         '--json', help='Print results to stdout as json', action='store_true')
+    parser.add_argument(
+        '--services', help='Comma-separated list of services to test. Empty to test all', type=str, default='')
 
     args = parser.parse_args()
+
+    service_names = [s.strip() for s in args.services.split(',')
+                     ] if args.services else None
 
     for n, line in enumerate(sys.stdin):
         key: Key = json.loads(line)
@@ -36,7 +41,8 @@ def main():
         output = enumerate_iam(access_key_id,
                                key['secret_access_key'],
                                key.get('session_token'),
-                               args.region)
+                               args.region,
+                               service_names)
         if args.json:
             output['key'] = key
             print(json.dumps(output, default=lambda o: repr(o)))

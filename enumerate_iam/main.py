@@ -21,6 +21,7 @@ import logging
 import os
 import random
 import re
+import typing as t
 
 import boto3
 import botocore
@@ -59,7 +60,7 @@ def report_arn(candidate):
     return None, None, None
 
 
-def enumerate_using_bruteforce(access_key, secret_key, session_token, region):
+def enumerate_using_bruteforce(access_key, secret_key, session_token, region, service_names: t.Optional[t.List[str]] = None):
     """
     Attempt to brute-force common describe calls.
     """
@@ -70,7 +71,7 @@ def enumerate_using_bruteforce(access_key, secret_key, session_token, region):
 
     pool = ThreadPool(MAX_THREADS)
     args_generator = generate_args(
-        access_key, secret_key, session_token, region)
+        access_key, secret_key, session_token, region, service_names)
 
     try:
         results = pool.map(check_one_permission, args_generator)
@@ -102,13 +103,10 @@ def enumerate_using_bruteforce(access_key, secret_key, session_token, region):
     return output
 
 
-def generate_args(access_key, secret_key, session_token, region):
-
-    service_names = list(BRUTEFORCE_TESTS.keys())
-
-    random.shuffle(service_names)
-
-    for service_name in service_names:
+def generate_args(access_key, secret_key, session_token, region, service_names: t.Optional[t.List[str]] = None):
+    s = service_names[:] or list(BRUTEFORCE_TESTS.keys())
+    random.shuffle(s)
+    for service_name in s:
         actions = list(BRUTEFORCE_TESTS[service_name])
         random.shuffle(actions)
 
@@ -233,7 +231,7 @@ def configure_logging():
         botocore.vendored.requests.packages.urllib3.exceptions.InsecureRequestWarning)
 
 
-def enumerate_iam(access_key, secret_key, session_token, region):
+def enumerate_iam(access_key, secret_key, session_token, region, service_names: t.Optional[t.List[str]] = None):
     """IAM Account Enumerator.
 
     This code provides a mechanism to attempt to validate the permissions assigned
@@ -245,7 +243,7 @@ def enumerate_iam(access_key, secret_key, session_token, region):
     output['iam'] = enumerate_using_iam(
         access_key, secret_key, session_token, region)
     output['bruteforce'] = enumerate_using_bruteforce(
-        access_key, secret_key, session_token, region)
+        access_key, secret_key, session_token, region, service_names)
 
     return output
 
